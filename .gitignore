@@ -1,0 +1,56 @@
+.env
+.env.*
+!.env.example
+
+# Python caches, virtual environments, tests and coverage
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+venv/
+
+# Local database and runtime files
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.log
+
+# Secrets and local certificates (keep only documented templates in Git)
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.envrc
+
+# Frontend build output and dependencies
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Docker/local tooling
+.docker/
+docker-compose.override.yml
+
+vendor/
+backups/
+.build/
+.idea/vcs.xml
+data/bootstrap/magnit/proxies.txt
+data/bootstrap/magnit/checkpoints/
+data/bootstrap/chizhik/proxies.txt
+data/bootstrap/chizhik/checkpoints/
+data/bootstrap/chizhik/test/
+
+.idea/*

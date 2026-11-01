@@ -1,0 +1,9 @@
+FROM mcr.microsoft.com/playwright/python:v1.57.0-noble
+WORKDIR /app
+COPY backend/ ./
+RUN pip install --no-cache-dir uv && uv pip install --system . && \
+    apt-get update && apt-get install -y --no-install-recommends xvfb fluxbox x11vnc novnc websockify && \
+    rm -rf /var/lib/apt/lists/*
+COPY docker/browser-entrypoint.sh /browser-entrypoint.sh
+RUN chmod +x /browser-entrypoint.sh
+CMD ["/browser-entrypoint.sh"]

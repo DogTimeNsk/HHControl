@@ -1,0 +1,9 @@
+{
+  "name": "hh-control-frontend",
+  "type": "module",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {"dev": "vite", "build": "vue-tsc -b && vite build"},
+  "dependencies": {"@vitejs/plugin-vue": "latest", "typescript": "latest", "vite": "latest", "vue": "latest", "vue-tsc": "latest"},
+  "devDependencies": {}
+}
