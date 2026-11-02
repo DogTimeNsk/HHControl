@@ -1,6 +1,8 @@
 """Control plane for the headed Playwright browser shown through noVNC."""
 from pathlib import Path
+import json
 import logging
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException
 from playwright.async_api import BrowserContext, Error, Page, Playwright, async_playwright
@@ -110,9 +112,9 @@ async def publish(resume_id: str) -> dict[str, str | bool | None]:
             "can_publish": False,
             "next_publish_at": availability.next_publish_at.isoformat() if availability.next_publish_at else None,
         }
-    # HH exposes this QA attribute on the actual applicant-resume action.
-    # Clicking the nested span bubbles to its clickable parent.
-    button = page.locator("[data-qa='resume-update-button-text']").first
+    # This is the actual "Поднять в поиске" button on the resume page.
+    # Use HH's QA attribute rather than versioned Magritte CSS classes.
+    button = page.locator("[data-qa='resume-update-button']").first
     if await button.count() == 0 or not await button.is_enabled():
         candidates = await page.locator("button, [role='button']").all_inner_texts()
         logger.warning("HH publish control not found: resume_id=%s controls=%s", resume_id, candidates[:20])
@@ -121,3 +123,109 @@ async def publish(resume_id: str) -> dict[str, str | bool | None]:
     await page.wait_for_timeout(1200)
     logger.info("HH publish control clicked: resume_id=%s", resume_id)
     return {"result": "success", "message": "Команда обновления отправлена через личный кабинет HH", "can_publish": True, "next_publish_at": None}
+
+
+@app.get("/resumes/{resume_id}/vacancies")
+async def vacancies(resume_id: str) -> dict[str, list[dict[str, object]]]:
+    """Collect all pages of HH's resume-based, new remote-vacancy search."""
+    page = await page_for_user()
+    query = [
+        ("enable_snippets", "true"), ("label", "not_from_agency"),
+        ("ored_clusters", "true"), ("resume", resume_id),
+        ("search_field", "name"), ("search_field", "description"),
+        ("search_period", "1"), ("work_format", "REMOTE"),
+        ("order_by", "publication_time"), ("items_on_page", "50"),
+    ]
+    base_url = f"https://hh.ru/search/vacancy?{urlencode(query)}"
+    await page.goto(base_url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(800)
+    rows = await _vacancy_rows(page)
+    page_links = await page.locator("[data-qa='pager-page']").evaluate_all(
+        "els => els.map(a => a.href)"
+    )
+    for page_url in dict.fromkeys(page_links):
+        if "page=0" in page_url:
+            continue
+        await page.goto(page_url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(500)
+        rows.extend(await _vacancy_rows(page))
+    unique = {str(row["hh_vacancy_id"]): row for row in rows}
+    logger.info("HH vacancy search collected: resume_id=%s vacancies=%s", resume_id, len(unique))
+    return {"items": list(unique.values())}
+
+
+async def _vacancy_rows(page: Page) -> list[dict[str, object]]:
+    raw_state = await page.locator("#HH-Lux-InitialState").text_content()
+    if not raw_state:
+        raise ValueError("HH search state was not found")
+    state = json.loads(raw_state, strict=False)
+    vacancies = state.get("vacancySearchResult", {}).get("vacancies", [])
+    if not isinstance(vacancies, list):
+        raise ValueError("HH search state has no vacancy list")
+    return [_vacancy_row(vacancy) for vacancy in vacancies if isinstance(vacancy, dict)]
+
+
+def _vacancy_row(vacancy: dict[str, object]) -> dict[str, object]:
+    compensation = _as_dict(vacancy.get("compensation"))
+    company = _as_dict(vacancy.get("company"))
+    address = _as_dict(vacancy.get("address"))
+    links = _as_dict(vacancy.get("links"))
+    properties = _vacancy_properties(vacancy)
+    return {
+        "hh_vacancy_id": str(vacancy["vacancyId"]),
+        "title": str(vacancy.get("name") or "Без названия"),
+        "vacancy_url": str(links.get("desktop") or f"https://hh.ru/vacancy/{vacancy['vacancyId']}"),
+        "employer_name": company.get("visibleName") or company.get("name"),
+        "employer_url": f"https://hh.ru/employer/{company['id']}" if company.get("id") else None,
+        "salary_from": _optional_int(compensation.get("from")),
+        "salary_to": _optional_int(compensation.get("to")),
+        "salary_currency": compensation.get("currencyCode"),
+        "salary_gross": _optional_bool(compensation.get("gross")),
+        "city": address.get("city"),
+        "responses_count": _optional_int(vacancy.get("responsesCount")),
+        "total_responses_count": _optional_int(vacancy.get("totalResponsesCount")),
+        "online_users_count": _optional_int(vacancy.get("online_users_count")),
+        "user_test_present": _optional_bool(vacancy.get("userTestPresent")),
+        "user_test_id": vacancy.get("userTestId"),
+        "accept_temporary": _optional_bool(vacancy.get("acceptTemporary")),
+        "work_formats": _work_formats(vacancy.get("workFormats")),
+        "company_negative_attributes": company.get("employersNegativeAttribute"),
+        "vacancy_properties": properties,
+    }
+
+
+def _as_dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _work_formats(value: object) -> list[str]:
+    return [str(item) for group in value if isinstance(group, dict)
+            for item in group.get("workFormatsElement", [])] if isinstance(value, list) else []
+
+
+def _vacancy_properties(vacancy: dict[str, object]) -> list[dict[str, object]]:
+    properties = _as_dict(vacancy.get("vacancyProperties")).get("properties", [])
+    return [property_ for group in properties if isinstance(group, dict)
+            for property_ in group.get("property", []) if isinstance(property_, dict)] if isinstance(properties, list) else []
+
+
+@app.get("/resumes/{resume_id}/ats-check")
+async def ats_check(resume_id: str) -> dict[str, bool]:
+    """Check the employer-facing print view for HH's achievements marker."""
+    page = await page_for_user()
+    await page.goto(
+        f"https://hh.ru/resume/{resume_id}?hhtmFrom=profile&print=true",
+        wait_until="domcontentloaded",
+    )
+    await page.wait_for_timeout(800)
+    achievements = await page.locator("[data-qa='resume-card-tag-achievements']").count() > 0
+    logger.info("HH ATS achievements check: resume_id=%s achievements=%s", resume_id, achievements)
+    return {"achievements": achievements}

@@ -10,6 +10,7 @@ from app.models.entities import AppSetting, BrowserCredential, PublishEvent, Res
 from app.services.browser_control import BrowserControlClient, BrowserControlError
 from app.services.publish_service import publish_resume
 from app.services.resume_service import parse_datetime
+from app.services.vacancy_monitor_service import collect_vacancies
 
 
 async def acquire_lock() -> bool:
@@ -62,5 +63,30 @@ async def run_scheduled_publish() -> dict[str, int | str]:
                 else:
                     await publish_resume(session, resume, client)
             return {"status": "completed", "processed": len(resumes)}
+    finally:
+        await release_lock()
+
+
+async def run_scheduled_vacancy_collection() -> dict[str, int | str]:
+    """Run the hourly resume-based vacancy search when a browser session exists."""
+    if not await acquire_lock():
+        return {"status": "already_running", "processed": 0}
+    try:
+        async with SessionLocal() as session:
+            if not await session.get(BrowserCredential, 1):
+                return {"status": "browser_session_required", "processed": 0}
+            resumes = (await session.scalars(select(Resume).where(
+                Resume.vacancy_monitoring_enabled.is_(True), Resume.managed.is_(True)
+            ))).all()
+            client = BrowserControlClient(get_settings())
+            processed = 0
+            for resume in resumes:
+                try:
+                    await collect_vacancies(session, resume, client)
+                    processed += 1
+                except BrowserControlError as exc:
+                    resume.last_error = str(exc)
+                    await session.commit()
+            return {"status": "completed", "processed": processed}
     finally:
         await release_lock()

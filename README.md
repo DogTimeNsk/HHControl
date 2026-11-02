@@ -14,6 +14,20 @@ To connect a different HH account, use **Отключить hh.ru** in the dashb
 
 The frontend routes `/hh/redirect` to the API OAuth callback. For production, put the frontend behind HTTPS and set `COOKIE_SECURE=true`.
 
+## Public release copy
+
+To maintain a separate public repository without transferring this repository's
+Git history or local files, create a separate clone and run the following from
+this repository:
+
+```bash
+./public_release.sh /path/to/public-release-repository
+```
+
+The script copies the current files with `rsync`, follows `.gitignore`, and
+excludes itself. Review, commit, and push from the target repository using its
+public-release Git identity.
+
 ## Architecture
 
 - `api`: FastAPI API, local admin session, OAuth token storage, database migrations.
@@ -43,6 +57,10 @@ Before a browser-driven publication attempt, the worker reads the resume's
 clicking anything. The dashboard shows the last observed availability and, when
 HH provides it, the next available time.
 
+The **Проверить ATS** action opens the employer-facing print view of a resume
+through the saved browser session and checks for HH's "Конкретные достижения"
+marker. It is a lightweight signal only, not a complete ATS evaluation.
+
 ### Browser session setup
 
 After `docker compose up -d --build`, sign in to the dashboard and select
@@ -63,3 +81,12 @@ API is unavailable. Do not attempt to bypass the restriction through hidden API
 endpoints; use the browser worker once it is implemented.
 
 No live publication is performed by tests or setup. Verify the OAuth flow with your own credentials after deployment.
+
+### Мониторинг подходящих вакансий
+
+Для каждого подключённого резюме можно включить **Собирать вакансии (раз в час)**.
+Планировщик открывает через сохранённую браузерную сессию HH выдачу, связанную с
+резюме, без явного `text`, с фильтрами: удалённая работа, не от кадровых агентств,
+за сутки, сортировка по дате и 50 результатов на странице. В базе сохраняются
+только новые ID вакансий, их название, ссылка, работодатель, зарплата, город и
+время первого обнаружения. Результаты доступны в «Статистике подходящих вакансий».

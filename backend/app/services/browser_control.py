@@ -45,3 +45,24 @@ class BrowserControlClient:
             return response.json()
         except httpx.HTTPError as exc:
             raise BrowserControlError("Не удалось обновить резюме в личном кабинете") from exc
+
+    async def ats_check(self, resume_id: str) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(f"{self.settings.browser_control_url}/resumes/{resume_id}/ats-check")
+            response.raise_for_status()
+            achievements = response.json()["achievements"]
+            if not isinstance(achievements, bool):
+                raise ValueError("Invalid achievements value")
+            return achievements
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise BrowserControlError("Не удалось проверить ATS-маркер резюме") from exc
+
+    async def vacancies(self, resume_id: str) -> list[dict[str, object]]:
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                response = await client.get(f"{self.settings.browser_control_url}/resumes/{resume_id}/vacancies")
+            response.raise_for_status()
+            return response.json()["items"]
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise BrowserControlError("Не удалось собрать подходящие вакансии из личного кабинета") from exc

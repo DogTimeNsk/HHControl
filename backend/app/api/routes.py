@@ -12,8 +12,8 @@ from app.api.deps import require_admin
 from app.core.config import get_settings
 from app.core.security import as_utc, decrypt, encrypt, encryption_key, verify_password
 from app.db.session import get_session
-from app.models.entities import AdminUser, BrowserCredential, OAuthCredential, OAuthState, PublishEvent, Resume
-from app.schemas.api import EventOut, LoginRequest, ManualResumeCreate, ResumeOut, ResumePatch
+from app.models.entities import AdminUser, BrowserCredential, OAuthCredential, OAuthState, PublishEvent, Resume, VacancyMatch
+from app.schemas.api import EventOut, LoginRequest, ManualResumeCreate, ResumeOut, ResumePatch, VacancyMatchOut
 from app.services.hh_client import HHClient, HHError
 from app.services.browser_control import BrowserControlClient, BrowserControlError
 from app.services.publish_service import publish_resume
@@ -249,6 +249,25 @@ async def patch_resume(resume_id: int, payload: ResumePatch, _: AdminUser = Depe
         raise HTTPException(404, "Резюме не найдено")
     if payload.enabled is not None:
         resume.enabled = payload.enabled
+    if payload.vacancy_monitoring_enabled is not None:
+        resume.vacancy_monitoring_enabled = payload.vacancy_monitoring_enabled
+    await session.commit()
+    await session.refresh(resume)
+    return resume
+
+
+@router.post("/resumes/{resume_id}/ats-check", response_model=ResumeOut)
+async def check_ats(resume_id: int, _: AdminUser = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    resume = await session.get(Resume, resume_id)
+    if not resume:
+        raise HTTPException(404, "Резюме не найдено")
+    if not await session.get(BrowserCredential, 1):
+        raise HTTPException(409, "Сначала войдите в hh.ru и сохраните Browser session")
+    try:
+        resume.ats_achievements = await BrowserControlClient(settings).ats_check(resume.hh_resume_id)
+    except BrowserControlError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    resume.ats_checked_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(resume)
     return resume
@@ -293,6 +312,15 @@ async def publish(resume_id: int, _: AdminUser = Depends(require_admin), session
 async def history(resume_id: int, _: AdminUser = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return (await session.scalars(select(PublishEvent).where(PublishEvent.resume_id == resume_id)
                                   .order_by(PublishEvent.started_at.desc()))).all()
+
+
+@router.get("/resumes/{resume_id}/vacancies", response_model=list[VacancyMatchOut])
+async def vacancy_matches(resume_id: int, _: AdminUser = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    resume = await session.get(Resume, resume_id)
+    if not resume:
+        raise HTTPException(404, "Резюме не найдено")
+    return (await session.scalars(select(VacancyMatch).where(VacancyMatch.resume_id == resume_id)
+                                  .order_by(VacancyMatch.parsed_at.desc()))).all()
 
 
 @router.get("/events", response_model=list[EventOut])

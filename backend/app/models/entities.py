@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -30,11 +30,16 @@ class Resume(Base, TimestampMixin):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     publish_available: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ats_achievements: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    ats_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_publish_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vacancy_monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_vacancy_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     events: Mapped[list["PublishEvent"]] = relationship()
+    vacancies: Mapped[list["VacancyMatch"]] = relationship()
 
 
 class PublishEvent(Base):
@@ -47,6 +52,33 @@ class PublishEvent(Base):
     result: Mapped[str] = mapped_column(String(16))
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     message: Mapped[str] = mapped_column(Text)
+
+
+class VacancyMatch(Base):
+    __tablename__ = "vacancy_matches"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resume_id: Mapped[int] = mapped_column(ForeignKey("resumes.id"), index=True)
+    hh_vacancy_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    vacancy_url: Mapped[str] = mapped_column(String(1000))
+    employer_name: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    employer_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    salary_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    salary_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    salary_gross: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    city: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    responses_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_responses_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    online_users_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    user_test_present: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    user_test_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    accept_temporary: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    work_formats: Mapped[list[str]] = mapped_column(JSON, default=list)
+    company_negative_attributes: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    vacancy_properties: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class AppSetting(Base):
