@@ -46,8 +46,10 @@ async def page_for_user() -> Page:
 
 @app.on_event("startup")
 async def startup() -> None:
-    page = await page_for_user()
-    await page.goto("https://hh.ru/", wait_until="domcontentloaded")
+    # Do not navigate the page here. This is the same visible page controlled
+    # through noVNC; a user navigation can abort Page.goto and must never make
+    # the entire browser service fail its startup lifecycle.
+    await page_for_user()
 
 
 @app.on_event("shutdown")
@@ -139,7 +141,11 @@ async def vacancies(resume_id: str) -> dict[str, list[dict[str, object]]]:
     base_url = f"https://hh.ru/search/vacancy?{urlencode(query)}"
     await page.goto(base_url, wait_until="domcontentloaded")
     await page.wait_for_timeout(800)
-    rows = await _vacancy_rows(page)
+    try:
+        rows = await _vacancy_rows(page)
+    except (Error, ValueError) as exc:
+        logger.warning("HH vacancy search cannot be parsed: resume_id=%s error=%s", resume_id, exc)
+        raise HTTPException(502, "HH не отдал список вакансий; проверьте browser session или CAPTCHA") from exc
     page_links = await page.locator("[data-qa='pager-page']").evaluate_all(
         "els => els.map(a => a.href)"
     )
@@ -148,21 +154,74 @@ async def vacancies(resume_id: str) -> dict[str, list[dict[str, object]]]:
             continue
         await page.goto(page_url, wait_until="domcontentloaded")
         await page.wait_for_timeout(500)
-        rows.extend(await _vacancy_rows(page))
+        try:
+            rows.extend(await _vacancy_rows(page))
+        except (Error, ValueError) as exc:
+            logger.warning("HH vacancy search page cannot be parsed: resume_id=%s error=%s", resume_id, exc)
+            raise HTTPException(502, "HH не отдал одну из страниц вакансий") from exc
     unique = {str(row["hh_vacancy_id"]): row for row in rows}
     logger.info("HH vacancy search collected: resume_id=%s vacancies=%s", resume_id, len(unique))
     return {"items": list(unique.values())}
 
 
 async def _vacancy_rows(page: Page) -> list[dict[str, object]]:
-    raw_state = await page.locator("#HH-Lux-InitialState").text_content()
-    if not raw_state:
-        raise ValueError("HH search state was not found")
-    state = json.loads(raw_state, strict=False)
-    vacancies = state.get("vacancySearchResult", {}).get("vacancies", [])
-    if not isinstance(vacancies, list):
-        raise ValueError("HH search state has no vacancy list")
-    return [_vacancy_row(vacancy) for vacancy in vacancies if isinstance(vacancy, dict)]
+    state_node = page.locator("#HH-Lux-InitialState")
+    try:
+        await state_node.wait_for(state="attached", timeout=10_000)
+        # HH keeps the state in a <template>; its payload is stored in the
+        # template's DocumentFragment, not necessarily in the element's own
+        # textContent. Reading it explicitly avoids silently using the
+        # reduced DOM fallback for every vacancy.
+        raw_state = await state_node.evaluate(
+            "node => node.content ? node.content.textContent : node.textContent"
+        )
+        if not raw_state:
+            raise ValueError("HH search state is empty")
+        state = json.loads(raw_state, strict=False)
+        vacancies = state.get("vacancySearchResult", {}).get("vacancies", [])
+        if not isinstance(vacancies, list):
+            raise ValueError("HH search state has no vacancy list")
+        return [_vacancy_row(vacancy) for vacancy in vacancies if isinstance(vacancy, dict)]
+    except (Error, ValueError, json.JSONDecodeError) as exc:
+        # HH occasionally delays or omits its hydration state. The visible
+        # cards still contain the essential data, so retain collection rather
+        # than failing the whole hourly run.
+        logger.warning("HH search state unavailable, falling back to DOM: %s", exc)
+        return await _vacancy_rows_from_dom(page)
+
+
+async def _vacancy_rows_from_dom(page: Page) -> list[dict[str, object]]:
+    cards = page.locator("[data-qa='vacancy-serp__vacancy']")
+    rows: list[dict[str, object]] = []
+    for index in range(await cards.count()):
+        card = cards.nth(index)
+        title_link = card.locator("a[data-qa='serp-item__title']").first
+        href = await title_link.get_attribute("href")
+        title = (await title_link.inner_text()).strip()
+        vacancy_id = (href or "").split("/vacancy/")[-1].split("?")[0]
+        if not vacancy_id.isdigit() or not title:
+            continue
+        employer = card.locator("a[data-qa='vacancy-serp__vacancy-employer']").first
+        employer_href = await employer.get_attribute("href") if await employer.count() else None
+        salary_values = await card.locator("[class*='compensation-labels'] data").evaluate_all(
+            "els => els.map(el => el.value)"
+        )
+        numbers = [int(value) for value in salary_values if str(value).isdigit()]
+        currency = next((str(value) for value in salary_values if not str(value).isdigit()), None)
+        city = card.locator("[data-qa='vacancy-serp__vacancy-address']").first
+        rows.append({
+            "hh_vacancy_id": vacancy_id, "title": title,
+            "vacancy_url": f"https://hh.ru/vacancy/{vacancy_id}",
+            "employer_name": (await employer.inner_text()).strip() if await employer.count() else None,
+            "employer_url": f"https://hh.ru{employer_href}" if employer_href else None,
+            "salary_from": numbers[0] if numbers else None,
+            "salary_to": numbers[1] if len(numbers) > 1 else None,
+            "salary_currency": currency,
+            "city": (await city.inner_text()).strip() if await city.count() else None,
+        })
+    if rows:
+        return rows
+    raise ValueError("HH vacancy cards were not found; check the browser session or CAPTCHA")
 
 
 def _vacancy_row(vacancy: dict[str, object]) -> dict[str, object]:
