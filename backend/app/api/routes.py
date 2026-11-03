@@ -1,6 +1,7 @@
 import secrets
 import logging
 import json
+import httpx
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -10,14 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin
 from app.core.config import get_settings
-from app.core.security import as_utc, decrypt, encrypt, encryption_key, verify_password
+from app.core.security import as_utc, decrypt, encrypt, encryption_key, is_valid_fernet_key, verify_password
 from app.db.session import get_session
 from app.models.entities import AdminUser, BrowserCredential, OAuthCredential, OAuthState, PublishEvent, Resume, VacancyMatch
-from app.schemas.api import EventOut, LoginRequest, ManualResumeCreate, ResumeOut, ResumePatch, VacancyMatchOut
+from app.schemas.api import EventOut, LoginRequest, ManualResumeCreate, ResumeOut, ResumePatch, VacancyCollectionOut, VacancyMatchOut
 from app.services.hh_client import HHClient, HHError
 from app.services.browser_control import BrowserControlClient, BrowserControlError
 from app.services.publish_service import publish_resume
 from app.services.resume_service import parse_datetime, sync_resumes
+from app.services.vacancy_monitor_service import collect_vacancies
 
 router = APIRouter(prefix="/api")
 settings = get_settings()
@@ -27,6 +29,29 @@ logger = logging.getLogger(__name__)
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/setup/status")
+async def setup_status(_: AdminUser = Depends(require_admin)) -> dict[str, object]:
+    """Return actionable configuration problems before a user action fails."""
+    issues: list[dict[str, str]] = []
+    if settings.app_session_secret == "change-me-before-production":
+        issues.append({"code": "app_session_secret", "message": "Не задан APP_SESSION_SECRET.",
+                       "help": "Укажите длинное случайное значение в .env и перезапустите сервисы."})
+    if not settings.token_encryption_key:
+        issues.append({"code": "token_encryption_key", "message": "Не задан TOKEN_ENCRYPTION_KEY.",
+                       "help": "Сгенерируйте Fernet-ключ и сохраните его в .env."})
+    elif not is_valid_fernet_key(settings.token_encryption_key):
+        issues.append({"code": "token_encryption_key", "message": "TOKEN_ENCRYPTION_KEY имеет неверный формат.",
+                       "help": "Используйте: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\". Сохраните полученный ключ в .env и перезапустите сервисы."})
+    try:
+        async with httpx.AsyncClient(timeout=2) as client:
+            response = await client.get(f"{settings.browser_control_url}/health")
+        response.raise_for_status()
+    except httpx.HTTPError:
+        issues.append({"code": "browser", "message": "Browser-сервис недоступен.",
+                       "help": "Проверьте docker compose logs browser и дождитесь запуска контейнера."})
+    return {"ready": not issues, "issues": issues}
 
 
 @router.post("/auth/login")
@@ -135,6 +160,8 @@ async def browser_session(_: AdminUser = Depends(require_admin), session: AsyncS
 @router.post("/browser/session/save")
 async def save_browser_session(_: AdminUser = Depends(require_admin), session: AsyncSession = Depends(get_session)) -> dict[str, bool]:
     from app.models.entities import BrowserCredential
+    if not settings.token_encryption_key or not is_valid_fernet_key(settings.token_encryption_key):
+        raise HTTPException(409, "Сначала задайте корректный TOKEN_ENCRYPTION_KEY в .env")
     try:
         state = await BrowserControlClient(settings).export_session()
     except BrowserControlError as exc:
@@ -321,6 +348,29 @@ async def vacancy_matches(resume_id: int, _: AdminUser = Depends(require_admin),
         raise HTTPException(404, "Резюме не найдено")
     return (await session.scalars(select(VacancyMatch).where(VacancyMatch.resume_id == resume_id)
                                   .order_by(VacancyMatch.parsed_at.desc()))).all()
+
+
+@router.post("/resumes/{resume_id}/vacancies/collect", response_model=VacancyCollectionOut)
+async def collect_vacancy_matches(resume_id: int, _: AdminUser = Depends(require_admin),
+                                  session: AsyncSession = Depends(get_session)):
+    resume = await session.get(Resume, resume_id)
+    if not resume or not resume.managed:
+        raise HTTPException(404, "Резюме не найдено")
+    if not await session.get(BrowserCredential, 1):
+        raise HTTPException(409, "Сначала войдите в hh.ru и сохраните Browser session")
+    from app.scheduler.worker import acquire_lock, release_lock
+    if not await acquire_lock():
+        raise HTTPException(409, "Сейчас выполняется другая задача планировщика")
+    try:
+        try:
+            new_count = await collect_vacancies(session, resume, BrowserControlClient(settings))
+        except BrowserControlError as exc:
+            resume.last_error = str(exc)
+            await session.commit()
+            raise HTTPException(503, str(exc)) from exc
+    finally:
+        await release_lock()
+    return VacancyCollectionOut(new_count=new_count)
 
 
 @router.get("/events", response_model=list[EventOut])

@@ -1,63 +1,58 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api } from './services/api'
 
-type Resume = { id:number; title:string; hh_resume_id:string; enabled:boolean; status:string|null; published_at:string|null; next_publish_at:string|null; publish_available:boolean|null; ats_achievements:boolean|null; ats_checked_at:string|null; last_error:string|null; vacancy_monitoring_enabled:boolean; last_vacancy_check_at:string|null }
-type Vacancy = { id:number; hh_vacancy_id:string; title:string; vacancy_url:string; employer_name:string|null; employer_url:string|null; salary_from:number|null; salary_to:number|null; salary_currency:string|null; salary_gross:boolean|null; city:string|null; responses_count:number|null; total_responses_count:number|null; online_users_count:number|null; user_test_present:boolean|null; user_test_id:string|null; accept_temporary:boolean|null; work_formats:string[]; company_negative_attributes:Record<string, unknown>|null; vacancy_properties:Record<string, unknown>[]; parsed_at:string; last_seen_at:string }
-const loggedIn = ref(false), username = ref('admin'), password = ref(''), resumes = ref<Resume[]>([]), connected = ref(false), message = ref(''), busy = ref(false), history = ref<string[]>([]), vacancies = ref<Vacancy[]>([]), vacancyTitle = ref(''), manualOpen = ref(false), helpOpen = ref(false), browserMenuOpen = ref(false), resumeMenuOpen = ref(false), manualId = ref(''), browserSaved = ref(false)
-const fmt = (v:string|null) => v ? new Date(v).toLocaleString('ru-RU') : '—'
-const salary = (v:Vacancy) => { if (v.salary_from === null && v.salary_to === null) return 'не указана'; const money = new Intl.NumberFormat('ru-RU'); return `${v.salary_from !== null ? `от ${money.format(v.salary_from)}` : ''}${v.salary_from !== null && v.salary_to !== null ? ' ' : ''}${v.salary_to !== null ? `до ${money.format(v.salary_to)}` : ''} ${v.salary_currency || ''}`.trim() }
-const flag = (v:boolean|null) => v === null ? 'неизвестно' : v ? 'да' : 'нет'
-const propertyTypes = (v:Vacancy) => v.vacancy_properties.map(p => String(p.propertyType || '')).filter(Boolean)
-const antiFraud = (v:Vacancy) => v.vacancy_properties.filter(p => String(p.propertyType || '').includes('ANTIFRAUD')).map(p => JSON.stringify(p))
-const negatives = (v:Vacancy) => v.company_negative_attributes ? Object.entries(v.company_negative_attributes).filter(([key, value]) => key !== 'employerId' && key !== 'creationDate' && value === true).map(([key]) => key).join(', ') || 'нет активных меток' : 'не указаны'
-async function load() { resumes.value = await api.get<Resume[]>('/resumes'); connected.value = (await api.get<{connected:boolean}>('/connection')).connected; browserSaved.value = (await api.get<{saved:boolean}>('/browser/session')).saved }
-async function login() { try { await api.post('/auth/login', { username:username.value, password:password.value }); loggedIn.value=true; password.value=''; await load() } catch(e) { message.value=(e as Error).message } }
-async function connect() { const r = await api.get<{authorization_url:string}>('/oauth/connect'); window.open(r.authorization_url, '_blank', 'width=600,height=700'); message.value='Завершите вход в открывшемся окне, затем синхронизируйте резюме.' }
-async function disconnect() { if (!confirm('Отключить HH-аккаунт? Локально сохранённые токены будут удалены, резюме на hh.ru не изменятся.')) return; await action(async()=> { await api.delete('/connection'); connected.value=false; message.value='HH-аккаунт отключён. Теперь можно подключить другой.' }) }
-async function addManual() { await action(async()=> { const resume = await api.post<Resume>('/resumes/manual', { hh_resume_id: manualId.value }); const index=resumes.value.findIndex(x=>x.id===resume.id); if (index >= 0) resumes.value[index]=resume; else resumes.value.push(resume); manualId.value=''; manualOpen.value=false; message.value='Резюме подключено. Автообновление выключено.' }) }
-async function saveBrowser() { await action(async()=> { await api.post('/browser/session/save'); browserSaved.value=true; message.value='Browser session сохранена. Теперь синхронизация использует личный кабинет HH.' }) }
-async function openBrowser() { await action(async()=> { await api.post('/browser/open'); window.open('/browser/vnc.html?autoconnect=true&path=browser/websockify', '_blank') }) }
-function openVnc() { window.open('/browser/vnc.html?autoconnect=true&path=browser/websockify', '_blank', 'noopener') }
-async function sync() { await action(async()=> { resumes.value = await api.post<Resume[]>('/resumes/sync'); message.value='Список резюме синхронизирован.' }) }
-async function toggle(r:Resume) { await action(async()=> { const updated=await api.patch<Resume>(`/resumes/${r.id}`, {enabled:!r.enabled}); Object.assign(r,updated) }) }
-async function toggleVacancyMonitoring(r:Resume) { await action(async()=> { const updated=await api.patch<Resume>(`/resumes/${r.id}`, {vacancy_monitoring_enabled:!r.vacancy_monitoring_enabled}); Object.assign(r,updated) }) }
-async function publish(r:Resume) { if (!confirm(`Обновить «${r.title}» сейчас?`)) return; await action(async()=> { const e=await api.post<{message:string}>(`/resumes/${r.id}/publish`); message.value=e.message; await load() }) }
-async function checkAts(r:Resume) { await action(async()=> { const updated=await api.post<Resume>(`/resumes/${r.id}/ats-check`); Object.assign(r,updated); message.value=updated.ats_achievements ? 'Есть конкретные достижения — хороший сигнал для ATS.' : 'Плашка «Конкретные достижения» не найдена.' }) }
-async function remove(r:Resume) { if (!confirm(`Убрать «${r.title}» из локального управления? На hh.ru оно останется.`)) return; await action(async()=> { await api.delete(`/resumes/${r.id}`); resumes.value=resumes.value.filter(x=>x.id!==r.id) }) }
-async function showHistory(r:Resume) { await action(async()=> { const rows=await api.get<{started_at:string,result:string,message:string}[]>(`/resumes/${r.id}/history`); history.value=rows.map(x=>`${new Date(x.started_at).toLocaleString('ru-RU')} — ${x.result}: ${x.message}`) }) }
-async function showVacancies(r:Resume) { await action(async()=> { vacancies.value=await api.get<Vacancy[]>(`/resumes/${r.id}/vacancies`); vacancyTitle.value=r.title }) }
-async function action(fn:()=>Promise<void>) { try { busy.value=true; await fn() } catch(e) { message.value=(e as Error).message } finally { busy.value=false } }
-async function logout() { await api.post('/auth/logout'); loggedIn.value=false }
-function toggleMenu(menu: 'browser' | 'resume') { if (menu === 'browser') { browserMenuOpen.value = !browserMenuOpen.value; resumeMenuOpen.value = false } else { resumeMenuOpen.value = !resumeMenuOpen.value; browserMenuOpen.value = false } }
-onMounted(async()=> { try { await api.get('/auth/me'); loggedIn.value=true; await load() } catch {} })
+import AppHeader from './components/AppHeader.vue'
+import HelpModal from './components/HelpModal.vue'
+import ManualResumeModal from './components/ManualResumeModal.vue'
+import OperationHistory from './components/OperationHistory.vue'
+import ResumeList from './components/ResumeList.vue'
+import SetupAlert from './components/SetupAlert.vue'
+import VacancyStatistics from './components/VacancyStatistics.vue'
+import { useDashboard } from './composables/useDashboard'
+
+const dashboard = useDashboard()
+const manualOpen = ref(false)
+const helpOpen = ref(false)
+
+async function addManualResume(id: string) {
+  await dashboard.addManualResume(id)
+  manualOpen.value = false
+}
+
+onMounted(async () => {
+  try {
+    await dashboard.load()
+    dashboard.loggedIn = true
+  } catch {
+    // Anonymous users see the login screen.
+  }
+})
 </script>
 
 <template>
   <main class="shell">
-    <section v-if="!loggedIn" class="card login"><h1>HH Control</h1><p>Вход администратора</p><input v-model="username" autocomplete="username" placeholder="Имя" /><input v-model="password" type="password" autocomplete="current-password" placeholder="Пароль" @keyup.enter="login" /><button @click="login">Войти</button><p class="message">{{ message }}</p></section>
+    <section v-if="!dashboard.loggedIn" class="card login">
+      <h1>HH Control</h1><p>Вход администратора</p>
+      <input v-model="dashboard.username" autocomplete="username" placeholder="Имя" />
+      <input v-model="dashboard.password" type="password" autocomplete="current-password" placeholder="Пароль" @keyup.enter="dashboard.login" />
+      <button @click="dashboard.login">Войти</button><p class="message">{{ dashboard.message }}</p>
+    </section>
+
     <template v-else>
-      <header>
-        <div class="brand"><h1>HH Control</h1><small>Browser: {{ browserSaved ? 'сессия сохранена' : 'требуется вход' }}</small></div>
-        <div class="action-panel">
-          <button class="secondary" @click="helpOpen=true">Справка</button>
-          <div class="menu-dropdown">
-            <button class="secondary" :aria-expanded="browserMenuOpen" @click="toggleMenu('browser')">hh.ru <span aria-hidden="true">▾</span></button>
-            <div v-if="browserMenuOpen" class="dropdown-menu"><button :disabled="busy" @click="openBrowser(); browserMenuOpen=false">Войти в hh.ru</button><button class="secondary" @click="openVnc(); browserMenuOpen=false">Открыть VNC</button><button :disabled="busy" @click="saveBrowser(); browserMenuOpen=false">Сохранить сессию</button></div>
-          </div>
-          <div class="menu-dropdown">
-            <button class="secondary" :aria-expanded="resumeMenuOpen" @click="toggleMenu('resume')">Резюме <span aria-hidden="true">▾</span></button>
-            <div v-if="resumeMenuOpen" class="dropdown-menu"><button :disabled="busy || !browserSaved" @click="manualOpen=true; resumeMenuOpen=false">Добавить резюме</button><button :disabled="busy || !browserSaved" @click="sync(); resumeMenuOpen=false">Синхронизировать</button></div>
-          </div>
-          <button class="secondary" @click="logout">Выйти</button>
-        </div>
-      </header>
-      <p v-if="message" class="message">{{ message }}</p>
-      <section class="card resume-list"><div v-if="!resumes.length" class="empty">{{ connected ? 'Резюме ещё не синхронизированы.' : 'Подключите аккаунт hh.ru.' }}</div><article v-for="r in resumes" :key="r.id" class="resume"><div class="resume-title"><h2>{{ r.title }}</h2><small>ID: {{ r.hh_resume_id }} · {{ r.status || 'статус неизвестен' }}</small></div><dl><div><dt>Обновлено</dt><dd>{{ fmt(r.published_at) }}</dd></div><div><dt>Поднятие</dt><dd>{{ r.publish_available === true ? 'доступно' : r.publish_available === false ? 'пока недоступно' : 'ещё не проверено' }}</dd></div><div><dt>ATS</dt><dd>{{ r.ats_achievements === true ? 'конкретные достижения есть' : r.ats_achievements === false ? 'конкретные достижения не найдены' : 'не проверено' }}</dd></div><div><dt>Следующая публикация</dt><dd>{{ fmt(r.next_publish_at) }}</dd></div><div><dt>Вакансии проверены</dt><dd>{{ fmt(r.last_vacancy_check_at) }}</dd></div><div v-if="r.last_error"><dt>Ошибка</dt><dd class="error">{{ r.last_error }}</dd></div></dl><div class="resume-actions"><label><input :checked="r.enabled" type="checkbox" @change="toggle(r)" /> Автообновление</label><label><input :checked="r.vacancy_monitoring_enabled" type="checkbox" @change="toggleVacancyMonitoring(r)" /> Собирать вакансии (раз в час)</label><button :disabled="busy" @click="publish(r)">Обновить сейчас</button><button :disabled="busy || !browserSaved" class="secondary" @click="checkAts(r)">Проверить ATS</button><button class="secondary" @click="showHistory(r)">История</button><button class="secondary" @click="showVacancies(r)">Статистика подходящих вакансий</button><button class="secondary" @click="remove(r)">Убрать</button></div></article></section>
-      <section v-if="history.length" class="card history"><div class="section-heading"><h2>История операций</h2><button class="icon-button secondary" aria-label="Закрыть историю" @click="history=[]">×</button></div><p v-for="row in history" :key="row">{{ row }}</p></section>
-      <section v-if="vacancyTitle" class="card history"><div class="section-heading"><h2>Подходящие вакансии: {{ vacancyTitle }}</h2><button class="icon-button secondary" aria-label="Закрыть статистику" @click="vacancies=[]; vacancyTitle=''">×</button></div><p v-if="!vacancies.length">Пока ничего не собрано. Включите сбор и дождитесь следующего почасового запуска.</p><article v-for="v in vacancies" :key="v.id" class="vacancy"><a :href="v.vacancy_url" target="_blank" rel="noopener">{{ v.title }}</a><div><a v-if="v.employer_url" :href="v.employer_url" target="_blank" rel="noopener">{{ v.employer_name }}</a><span v-else>{{ v.employer_name || 'Компания не указана' }}</span> · {{ v.city || 'город не указан' }}</div><div>Зарплата: {{ salary(v) }}{{ v.salary_gross === null ? '' : v.salary_gross ? ', до вычета налогов' : ', на руки' }} · Впервые: {{ fmt(v.parsed_at) }}</div><details><summary>Посмотреть подробности</summary><dl class="vacancy-details"><div><dt>Отклики</dt><dd>{{ v.responses_count ?? '—' }} / {{ v.total_responses_count ?? '—' }}</dd></div><div><dt>Смотрят сейчас</dt><dd>{{ v.online_users_count ?? '—' }}</dd></div><div><dt>Тест при отклике</dt><dd>{{ flag(v.user_test_present) }}</dd></div><div><dt>Временная работа</dt><dd>{{ flag(v.accept_temporary) }}</dd></div><div><dt>Форматы работы</dt><dd>{{ v.work_formats.join(', ') || '—' }}</dd></div><div><dt>Последний раз найдено</dt><dd>{{ fmt(v.last_seen_at) }}</dd></div><div><dt>Негативные метки компании</dt><dd>{{ negatives(v) }}</dd></div><div><dt>Свойства HH</dt><dd>{{ propertyTypes(v).join(', ') || '—' }}</dd></div><div v-if="antiFraud(v).length"><dt>Антифрод</dt><dd class="raw">{{ antiFraud(v).join('; ') }}</dd></div></dl></details></article></section>
-      <div v-if="manualOpen" class="modal-backdrop" @click.self="manualOpen=false"><form class="modal card" @submit.prevent="addManual"><h2>Добавить резюме вручную</h2><p>Скопируйте ID из адреса страницы резюме на hh.ru.</p><input v-model.trim="manualId" required maxlength="128" pattern="[A-Za-z0-9]+" placeholder="ID резюме" autofocus /><div class="actions"><button :disabled="busy">Подключить</button><button type="button" class="secondary" @click="manualOpen=false">Отмена</button></div></form></div>
-      <div v-if="helpOpen" class="modal-backdrop" @click.self="helpOpen=false"><section class="modal card help" role="dialog" aria-modal="true" aria-labelledby="help-title"><div class="section-heading"><h2 id="help-title">О HH Control</h2><button class="icon-button secondary" aria-label="Закрыть справку" @click="helpOpen=false">×</button></div><p>HH Control помогает отслеживать доступность и автоматически поднимать ваши собственные резюме в поиске HeadHunter.</p><p>Сначала войдите в hh.ru через VNC и сохраните сессию. Затем добавьте и синхронизируйте резюме, включите автообновление для нужных из них.</p><p>«Открыть VNC» показывает текущий экран браузера без создания новой сессии. Никому не передавайте доступ к этой странице.</p><div class="actions"><button @click="helpOpen=false">Понятно</button></div></section></div>
+      <AppHeader :browser-saved="dashboard.browserSaved" :busy="dashboard.busy" :setup-ready="dashboard.setupReady"
+        @help="helpOpen = true" @login-hh="dashboard.openBrowser" @open-vnc="dashboard.openVnc"
+        @save-browser="dashboard.saveBrowser" @add-resume="manualOpen = true" @sync-resumes="dashboard.syncResumes"
+        @logout="dashboard.logout" />
+      <SetupAlert :issues="dashboard.setupIssues" />
+      <p v-if="dashboard.message" class="message">{{ dashboard.message }}</p>
+      <ResumeList :resumes="dashboard.resumes" :connected="dashboard.connected" :busy="dashboard.busy" :browser-saved="dashboard.browserSaved"
+        @toggle-publishing="dashboard.togglePublishing" @toggle-monitoring="dashboard.toggleVacancyMonitoring"
+        @publish="dashboard.publish" @ats="dashboard.checkAts" @collect="dashboard.collectVacancies"
+        @history="dashboard.showHistory" @vacancies="dashboard.showVacancies" @remove="dashboard.removeResume" />
+      <OperationHistory :rows="dashboard.history" @close="dashboard.history = []" />
+      <VacancyStatistics :title="dashboard.vacancyTitle" :vacancies="dashboard.vacancies" @close="dashboard.vacancies = []; dashboard.vacancyTitle = ''" />
+      <ManualResumeModal v-if="manualOpen" :busy="dashboard.busy" @close="manualOpen = false" @submit="addManualResume" />
+      <HelpModal v-if="helpOpen" @close="helpOpen = false" />
     </template>
   </main>
 </template>

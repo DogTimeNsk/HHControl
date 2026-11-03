@@ -27,6 +27,14 @@ def encryption_key(value: str, fallback_secret: str) -> bytes:
     return base64.urlsafe_b64encode(digest)
 
 
+def is_valid_fernet_key(value: str) -> bool:
+    try:
+        Fernet(value.encode())
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def encrypt(value: str, key: bytes) -> str:
     return Fernet(key).encrypt(value.encode()).decode()
 

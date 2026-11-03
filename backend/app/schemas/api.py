@@ -63,6 +63,10 @@ class VacancyMatchOut(BaseModel):
     last_seen_at: datetime
 
 
+class VacancyCollectionOut(BaseModel):
+    new_count: int
+
+
 class EventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
