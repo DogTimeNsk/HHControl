@@ -11,6 +11,8 @@ export type Resume = {
   ats_checked_at: string | null
   last_error: string | null
   vacancy_monitoring_enabled: boolean
+  vacancy_response_limit_enabled: boolean
+  vacancy_response_limit: number
   last_vacancy_check_at: string | null
 }
 
@@ -40,4 +42,4 @@ export type Vacancy = {
 }
 
 export type SetupIssue = { code: string; message: string; help: string }
-export type PublishEvent = { started_at: string; result: string; message: string }
+export type PublishEvent = { started_at: string; operation: string; result: string; message: string }

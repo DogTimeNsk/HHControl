@@ -2,18 +2,19 @@
 from pathlib import Path
 import json
 import logging
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import FastAPI, HTTPException
 from playwright.async_api import BrowserContext, Error, Page, Playwright, async_playwright
 
 from app.core.config import get_settings
 from app.browser.parsing import resume_id_from_url
-from app.browser.publication import publication_availability
+from app.browser.publication import PublicationAvailability, publication_availability, publication_availability_from_state
 
 app = FastAPI(title="HH Control browser")
 settings = get_settings()
 logger = logging.getLogger(__name__)
+MAX_VACANCY_SEARCH_PAGES = 4
 pw: Playwright | None = None
 context: BrowserContext | None = None
 
@@ -102,10 +103,7 @@ async def publish(resume_id: str) -> dict[str, str | bool | None]:
     page = await page_for_user()
     await page.goto(f"https://hh.ru/resume/{resume_id}", wait_until="domcontentloaded")
     await page.wait_for_timeout(800)
-    availability = publication_availability(
-        await page.locator("[data-qa='cell-text-content']").all_inner_texts(),
-        automatic_renewal_link=await page.locator("[data-qa='resumeservice-button__renewresume']").count() > 0,
-    )
+    availability = await _resume_publication_availability(page)
     if not availability.can_publish:
         logger.info("HH publication unavailable: resume_id=%s message=%s", resume_id, availability.message)
         return {
@@ -123,13 +121,37 @@ async def publish(resume_id: str) -> dict[str, str | bool | None]:
         return {"result": "skipped", "message": "Кнопка поднятия не найдена или пока недоступна в личном кабинете HH", "can_publish": False, "next_publish_at": None}
     await button.click()
     await page.wait_for_timeout(1200)
+    next_availability = await _resume_publication_availability(page)
     logger.info("HH publish control clicked: resume_id=%s", resume_id)
-    return {"result": "success", "message": "Команда обновления отправлена через личный кабинет HH", "can_publish": True, "next_publish_at": None}
+    return {
+        "result": "success", "message": "Команда обновления отправлена через личный кабинет HH",
+        "can_publish": True,
+        "next_publish_at": next_availability.next_publish_at.isoformat() if next_availability.next_publish_at else None,
+    }
+
+
+async def _resume_publication_availability(page: Page) -> PublicationAvailability:
+    state_node = page.locator("#ResumeProfileFront-InitialState")
+    try:
+        await state_node.wait_for(state="attached", timeout=3_000)
+        raw_state = await state_node.evaluate(
+            "node => node.content ? node.content.textContent : node.textContent"
+        )
+        if raw_state:
+            availability = publication_availability_from_state(json.loads(raw_state, strict=False))
+            if availability is not None:
+                return availability
+    except (Error, ValueError, json.JSONDecodeError) as exc:
+        logger.info("HH resume state unavailable, using visible publication card: %s", exc)
+    return publication_availability(
+        await page.locator("[data-qa='cell-text-content']").all_inner_texts(),
+        automatic_renewal_link=await page.locator("[data-qa='resumeservice-button__renewresume']").count() > 0,
+    )
 
 
 @app.get("/resumes/{resume_id}/vacancies")
 async def vacancies(resume_id: str) -> dict[str, list[dict[str, object]]]:
-    """Collect all pages of HH's resume-based, new remote-vacancy search."""
+    """Collect at most four pages of HH's resume-based vacancy search."""
     page = await page_for_user()
     query = [
         ("enable_snippets", "true"), ("label", "not_from_agency"),
@@ -149,9 +171,7 @@ async def vacancies(resume_id: str) -> dict[str, list[dict[str, object]]]:
     page_links = await page.locator("[data-qa='pager-page']").evaluate_all(
         "els => els.map(a => a.href)"
     )
-    for page_url in dict.fromkeys(page_links):
-        if "page=0" in page_url:
-            continue
+    for page_url in _additional_search_page_urls(page_links):
         await page.goto(page_url, wait_until="domcontentloaded")
         await page.wait_for_timeout(500)
         try:
@@ -162,6 +182,21 @@ async def vacancies(resume_id: str) -> dict[str, list[dict[str, object]]]:
     unique = {str(row["hh_vacancy_id"]): row for row in rows}
     logger.info("HH vacancy search collected: resume_id=%s vacancies=%s", resume_id, len(unique))
     return {"items": list(unique.values())}
+
+
+def _additional_search_page_urls(page_links: list[object]) -> list[str]:
+    """Use HH pager links for pages 2–4, retaining its search session parameters."""
+    pages: dict[int, str] = {}
+    for link in page_links:
+        if not isinstance(link, str):
+            continue
+        raw_page = parse_qs(urlsplit(link).query).get("page", [])
+        if len(raw_page) != 1 or not raw_page[0].isdigit():
+            continue
+        page_number = int(raw_page[0])
+        if 0 < page_number < MAX_VACANCY_SEARCH_PAGES:
+            pages[page_number] = link
+    return [pages[page_number] for page_number in sorted(pages)]
 
 
 async def _vacancy_rows(page: Page) -> list[dict[str, object]]:

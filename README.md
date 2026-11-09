@@ -14,6 +14,19 @@ To connect a different HH account, use **Отключить hh.ru** in the dashb
 
 The frontend routes `/hh/redirect` to the API OAuth callback. For production, put the frontend behind HTTPS and set `COOKIE_SECURE=true`.
 
+## Telegram: finding a chat ID
+
+Create a bot with [@BotFather](https://t.me/BotFather), place its token in `.env` as
+`TELEGRAM_BOT_TOKEN`, and restart the `api` container. Open a private chat with the bot (or add
+it to a group) and send `/start`. In the dashboard, select **Find Telegram chat_id**: the app
+lists chat IDs from recent bot updates. The token is never returned by the API, displayed in the
+dashboard, or logged.
+
+Set the selected ID as `TELEGRAM_CHAT_ID` in `.env` and restart the `api` and `scheduler`
+containers. When a resume has the **Collect only vacancies with fewer responses** filter enabled,
+the bot sends one notification for each newly saved vacancy that passes this filter. Notifications
+are sent for both manual and scheduled collection; previously saved vacancies never generate repeats.
+
 ## Public release copy
 
 To maintain a separate public repository without transferring this repository's
@@ -40,6 +53,13 @@ SQLite uses WAL and a busy timeout. It is suitable for this single-host, two-pro
 
 For deployment behind a host Nginx with HTTPS and an IP
 allowlist, follow [the Nginx deployment guide](docs/deployment-nginx.md).
+
+## Firefox extension: live vacancy details
+
+The standalone [Firefox extension](firefox-extension/README.md) adds a
+«Данные HH» panel to an already opened `hh.ru/vacancy/<id>` page. It visualizes
+the current `HH-Lux-InitialState` data locally in Firefox; it does not contact
+HH Control, make API requests, or store credentials.
 
 ## HH integration behavior
 
@@ -82,11 +102,19 @@ endpoints; use the browser worker once it is implemented.
 
 No live publication is performed by tests or setup. Verify the OAuth flow with your own credentials after deployment.
 
-### Мониторинг подходящих вакансий
+### Suitable-vacancy monitoring
 
-Для каждого подключённого резюме можно включить **Собирать вакансии (раз в час)**.
-Планировщик открывает через сохранённую браузерную сессию HH выдачу, связанную с
-резюме, без явного `text`, с фильтрами: удалённая работа, не от кадровых агентств,
-за сутки, сортировка по дате и 50 результатов на странице. В базе сохраняются
-только новые ID вакансий, их название, ссылка, работодатель, зарплата, город и
-время первого обнаружения. Результаты доступны в «Статистике подходящих вакансий».
+For each connected resume, you can enable **Collect vacancies (hourly)**. You can also enable
+the **Collect only vacancies with fewer responses** filter and set a per-resume limit (30 by
+default). When the filter is on, vacancies without a response counter are not stored because the
+application cannot verify that they meet the limit.
+
+Vacancies are sorted by first-discovered time, with the newest first. Subsequent collections do
+not update a saved vacancy or change its place in the list. The same HH vacancy can be stored
+independently for several resumes; every record is unique by its `resume_id + hh_vacancy_id` pair.
+
+Using the saved HH browser session, the scheduler opens the resume-based search without an
+explicit `text` query and applies these filters: remote work, not from agencies, last 24 hours,
+publication-date order, and 50 results per page. Each run opens no more than the first four
+result pages. The database stores only newly found vacancy IDs, their title, link, employer,
+salary, city, and first-discovered timestamp. Results are available in Suitable vacancy statistics.

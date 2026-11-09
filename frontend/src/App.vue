@@ -42,11 +42,13 @@ onMounted(async () => {
       <AppHeader :browser-saved="dashboard.browserSaved" :busy="dashboard.busy" :setup-ready="dashboard.setupReady"
         @help="helpOpen = true" @login-hh="dashboard.openBrowser" @open-vnc="dashboard.openVnc"
         @save-browser="dashboard.saveBrowser" @add-resume="manualOpen = true" @sync-resumes="dashboard.syncResumes"
+        @find-telegram-chats="dashboard.findTelegramChats"
         @logout="dashboard.logout" />
       <SetupAlert :issues="dashboard.setupIssues" />
       <p v-if="dashboard.message" class="message">{{ dashboard.message }}</p>
       <ResumeList :resumes="dashboard.resumes" :connected="dashboard.connected" :busy="dashboard.busy" :browser-saved="dashboard.browserSaved"
         @toggle-publishing="dashboard.togglePublishing" @toggle-monitoring="dashboard.toggleVacancyMonitoring"
+        @toggle-response-limit="dashboard.toggleVacancyResponseLimit" @set-response-limit="dashboard.setVacancyResponseLimit"
         @publish="dashboard.publish" @ats="dashboard.checkAts" @collect="dashboard.collectVacancies"
         @history="dashboard.showHistory" @vacancies="dashboard.showVacancies" @remove="dashboard.removeResume" />
       <OperationHistory :rows="dashboard.history" @close="dashboard.history = []" />

@@ -1,10 +1,16 @@
 from datetime import datetime, timezone
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import Resume, VacancyMatch
 from app.services.browser_control import BrowserControlClient
+from app.core.config import get_settings
+from app.services.telegram_bot import TelegramBotError, send_message, vacancy_notification_text
+
+
+logger = logging.getLogger(__name__)
 
 
 async def collect_vacancies(
@@ -14,19 +20,54 @@ async def collect_vacancies(
     rows = await client.vacancies(resume.hh_resume_id)
     now = datetime.now(timezone.utc)
     new_count = 0
+    new_rows: list[dict[str, object]] = []
     for row in rows:
+        if not _should_collect_vacancy(row, resume):
+            continue
         vacancy_id = str(row["hh_vacancy_id"])
-        match = await session.scalar(select(VacancyMatch).where(VacancyMatch.hh_vacancy_id == vacancy_id))
+        match = await session.scalar(select(VacancyMatch).where(
+            VacancyMatch.resume_id == resume.id,
+            VacancyMatch.hh_vacancy_id == vacancy_id,
+        ))
         values = _match_values(row, now)
         if match is None:
             session.add(VacancyMatch(resume_id=resume.id, hh_vacancy_id=vacancy_id, parsed_at=now, **values))
             new_count += 1
-        else:
-            for key, value in values.items():
-                setattr(match, key, value)
+            new_rows.append(row)
     resume.last_vacancy_check_at = now
     await session.commit()
+    await _notify_about_new_vacancies(resume, new_rows)
     return new_count
+
+
+def _should_collect_vacancy(row: dict[str, object], resume: Resume) -> bool:
+    """Apply the optional per-resume response limit before persisting a vacancy."""
+    if not resume.vacancy_response_limit_enabled:
+        return True
+    responses = _optional_int(row.get("total_responses_count"))
+    if responses is None:
+        responses = _optional_int(row.get("responses_count"))
+    return responses is not None and responses < resume.vacancy_response_limit
+
+
+async def _notify_about_new_vacancies(resume: Resume, rows: list[dict[str, object]]) -> None:
+    settings = get_settings()
+    if not rows or not resume.vacancy_response_limit_enabled:
+        return
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        logger.info("Telegram notifications skipped: bot token or chat ID is not configured")
+        return
+    for row in rows:
+        try:
+            await send_message(
+                settings.telegram_bot_token,
+                settings.telegram_chat_id,
+                vacancy_notification_text(resume.title, row),
+            )
+        except TelegramBotError as exc:
+            # The vacancy is already safely stored. A temporary Telegram
+            # outage must not make a manual or scheduled collection fail.
+            logger.warning("Telegram notification was not sent: resume_id=%s error=%s", resume.id, exc)
 
 
 def _optional_text(value: object | None) -> str | None:

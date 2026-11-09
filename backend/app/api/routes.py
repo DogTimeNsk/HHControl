@@ -20,6 +20,7 @@ from app.services.browser_control import BrowserControlClient, BrowserControlErr
 from app.services.publish_service import publish_resume
 from app.services.resume_service import parse_datetime, sync_resumes
 from app.services.vacancy_monitor_service import collect_vacancies
+from app.services.telegram_bot import TelegramBotError, recent_chats
 
 router = APIRouter(prefix="/api")
 settings = get_settings()
@@ -140,6 +141,17 @@ async def hh_client(session: AsyncSession) -> HHClient:
 @router.get("/connection")
 async def connection(_: AdminUser = Depends(require_admin), session: AsyncSession = Depends(get_session)) -> dict[str, bool]:
     return {"connected": bool(await session.get(OAuthCredential, 1))}
+
+
+@router.get("/telegram/chats")
+async def telegram_chats(_: AdminUser = Depends(require_admin)) -> list[dict[str, str | int]]:
+    """List chats that contacted the configured bot, for selecting a chat ID."""
+    if not settings.telegram_bot_token:
+        raise HTTPException(409, "Добавьте TELEGRAM_BOT_TOKEN в .env и перезапустите api")
+    try:
+        return await recent_chats(settings.telegram_bot_token)
+    except TelegramBotError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @router.delete("/connection", status_code=204)
@@ -278,6 +290,12 @@ async def patch_resume(resume_id: int, payload: ResumePatch, _: AdminUser = Depe
         resume.enabled = payload.enabled
     if payload.vacancy_monitoring_enabled is not None:
         resume.vacancy_monitoring_enabled = payload.vacancy_monitoring_enabled
+    if payload.vacancy_response_limit_enabled is not None:
+        if payload.vacancy_response_limit_enabled and not resume.vacancy_monitoring_enabled:
+            raise HTTPException(422, "Сначала включите сбор вакансий")
+        resume.vacancy_response_limit_enabled = payload.vacancy_response_limit_enabled
+    if payload.vacancy_response_limit is not None:
+        resume.vacancy_response_limit = payload.vacancy_response_limit
     await session.commit()
     await session.refresh(resume)
     return resume
@@ -382,7 +400,8 @@ async def events(_: AdminUser = Depends(require_admin), session: AsyncSession = 
 async def scheduler_status(_: AdminUser = Depends(require_admin), session: AsyncSession = Depends(get_session)) -> dict[str, str | int | None]:
     from app.models.entities import AppSetting
     lock = await session.get(AppSetting, "scheduler_lock")
-    return {"interval_hours": settings.scheduler_interval_hours, "lock_until": lock.value if lock else None}
+    return {"publish_check_interval_minutes": settings.publish_check_interval_minutes,
+            "lock_until": lock.value if lock else None}
 
 
 @router.post("/scheduler/run")

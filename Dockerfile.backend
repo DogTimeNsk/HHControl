@@ -1,6 +1,15 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# Keep dependency resolution in a layer that changes only when the project
+# metadata or lockfile changes. Editing application code then avoids a slow
+# re-download through a VPN on every image rebuild.
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    pip install --no-cache-dir uv && \
+    uv export --frozen --no-dev --no-emit-project -o requirements.txt && \
+    uv pip install --system -r requirements.txt
 COPY backend/ ./
-RUN pip install --no-cache-dir uv && uv pip install --system .
+RUN uv pip install --system --no-deps .
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

@@ -2,6 +2,9 @@ import { proxyRefs, ref } from 'vue'
 
 import { api } from '../services/api'
 import type { PublishEvent, Resume, SetupIssue, Vacancy } from '../types'
+import { formatDateTime } from '../utils/date'
+
+type TelegramChat = { id: number; type: string; name: string; username: string }
 
 export function useDashboard() {
   const loggedIn = ref(false)
@@ -80,6 +83,15 @@ export function useDashboard() {
     })
   }
 
+  async function findTelegramChats() {
+    await action(async () => {
+      const chats = await api.get<TelegramChat[]>('/telegram/chats')
+      message.value = chats.length
+        ? `Telegram chat_id: ${chats.map((chat) => `${chat.name} (${chat.id})`).join('; ')}`
+        : 'Telegram пока не вернул чаты. Откройте диалог с ботом, отправьте /start и повторите.'
+    })
+  }
+
   async function addManualResume(hhResumeId: string) {
     await action(async () => {
       const resume = await api.post<Resume>('/resumes/manual', { hh_resume_id: hhResumeId })
@@ -104,6 +116,24 @@ export function useDashboard() {
       const updated = await api.patch<Resume>(`/resumes/${resume.id}`, {
         vacancy_monitoring_enabled: !resume.vacancy_monitoring_enabled,
       })
+      Object.assign(resume, updated)
+    })
+  }
+
+  async function toggleVacancyResponseLimit(resume: Resume) {
+    if (!setupReady.value || !resume.vacancy_monitoring_enabled) return
+    await action(async () => {
+      const updated = await api.patch<Resume>(`/resumes/${resume.id}`, {
+        vacancy_response_limit_enabled: !resume.vacancy_response_limit_enabled,
+      })
+      Object.assign(resume, updated)
+    })
+  }
+
+  async function setVacancyResponseLimit(resume: Resume, limit: number) {
+    if (!setupReady.value || !resume.vacancy_monitoring_enabled || !Number.isInteger(limit) || limit < 1) return
+    await action(async () => {
+      const updated = await api.patch<Resume>(`/resumes/${resume.id}`, { vacancy_response_limit: limit })
       Object.assign(resume, updated)
     })
   }
@@ -139,7 +169,7 @@ export function useDashboard() {
   async function showHistory(resume: Resume) {
     await action(async () => {
       const rows = await api.get<PublishEvent[]>(`/resumes/${resume.id}/history`)
-      history.value = rows.map((row) => `${new Date(row.started_at).toLocaleString('ru-RU')} — ${row.result}: ${row.message}`)
+      history.value = rows.map((row) => `${formatDateTime(row.started_at)} — ${row.operation}/${row.result}: ${row.message}`)
     })
   }
 
@@ -164,8 +194,9 @@ export function useDashboard() {
   return proxyRefs({
     loggedIn, username, password, resumes, connected, browserSaved, setupReady, setupIssues,
     message, busy, history, vacancies, vacancyTitle,
-    load, login, logout, openBrowser, openVnc, saveBrowser, syncResumes, addManualResume,
-    togglePublishing, toggleVacancyMonitoring, publish, checkAts, removeResume, showHistory,
+    load, login, logout, openBrowser, openVnc, saveBrowser, syncResumes, findTelegramChats, addManualResume,
+    togglePublishing, toggleVacancyMonitoring, toggleVacancyResponseLimit, setVacancyResponseLimit,
+    publish, checkAts, removeResume, showHistory,
     showVacancies, collectVacancies,
   })
 }

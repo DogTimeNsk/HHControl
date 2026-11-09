@@ -37,6 +37,8 @@ class Resume(Base, TimestampMixin):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     vacancy_monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    vacancy_response_limit_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    vacancy_response_limit: Mapped[int] = mapped_column(Integer, default=30)
     last_vacancy_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     events: Mapped[list["PublishEvent"]] = relationship()
     vacancies: Mapped[list["VacancyMatch"]] = relationship()
@@ -56,9 +58,10 @@ class PublishEvent(Base):
 
 class VacancyMatch(Base):
     __tablename__ = "vacancy_matches"
+    __table_args__ = (UniqueConstraint("resume_id", "hh_vacancy_id", name="uq_vacancy_matches_resume_hh"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     resume_id: Mapped[int] = mapped_column(ForeignKey("resumes.id"), index=True)
-    hh_vacancy_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    hh_vacancy_id: Mapped[str] = mapped_column(String(32), index=True)
     title: Mapped[str] = mapped_column(String(500))
     vacancy_url: Mapped[str] = mapped_column(String(1000))
     employer_name: Mapped[str | None] = mapped_column(String(500), nullable=True)

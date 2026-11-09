@@ -84,6 +84,8 @@ summary { padding: 9px 11px; cursor: pointer; color: #b7d3ff; font-weight: 650; 
 details[open] summary { border-bottom: 1px solid var(--line); }
 .vacancy-details { margin: 0; padding: 13px; border: 0; }
 .raw { max-width: 700px; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .84rem; color: #d2dae5; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding-top: 18px; color: var(--muted); }
+.pagination span { min-width: 132px; text-align: center; font-size: .9rem; }
 
 .modal { border-color: #53637a; box-shadow: 0 28px 72px rgb(0 0 0 / 48%); }
 
@@ -93,4 +95,5 @@ details[open] summary { border-bottom: 1px solid var(--line); }
   .resume-title { align-items: flex-start; flex-direction: column; gap: 3px; }
   .setup-alert, .history { padding: 18px; }
   .action-panel { gap: 7px; }
+  .pagination { gap: 8px; }
 }

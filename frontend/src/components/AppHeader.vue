@@ -9,6 +9,7 @@ const emit = defineEmits<{
   saveBrowser: []
   addResume: []
   syncResumes: []
+  findTelegramChats: []
   logout: []
 }>()
 const browserOpen = ref(false)
@@ -38,6 +39,7 @@ function emitAndClose(event: 'loginHh' | 'openVnc' | 'saveBrowser' | 'addResume'
     <div class="brand"><h1>HH Control</h1><small>Browser: {{ browserSaved ? 'сессия сохранена' : 'требуется вход' }}</small></div>
     <div class="action-panel">
       <button class="secondary" @click="emit('help')">Справка</button>
+      <button class="secondary" :disabled="busy" @click="emit('findTelegramChats')">Найти Telegram chat_id</button>
       <div class="menu-dropdown">
         <button class="secondary" :aria-expanded="browserOpen" @click="toggle('browser')">hh.ru <span aria-hidden="true">▾</span></button>
         <div v-if="browserOpen" class="dropdown-menu">

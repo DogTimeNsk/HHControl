@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     app_session_secret: str = "change-me-before-production"
     token_encryption_key: str = ""
     admin_username: str = "admin"
-    scheduler_interval_hours: int = 4
+    publish_check_interval_minutes: int = 5
+    scheduler_lock_wait_seconds: int = 600
+    unknown_publish_check_interval_minutes: int = 60
     hh_client_id: str = ""
     hh_client_secret: str = ""
     hh_oauth_redirect_uri: str = ""
@@ -21,6 +23,8 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     browser_control_url: str = "http://browser:9000"
     browser_profile_dir: str = "/browser-data/profile"
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
     @property
     def sqlite_path(self) -> Path | None:

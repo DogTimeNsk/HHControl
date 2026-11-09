@@ -6,6 +6,8 @@ defineProps<{ resumes: Resume[]; connected: boolean; busy: boolean; browserSaved
 const emit = defineEmits<{
   togglePublishing: [resume: Resume]
   toggleMonitoring: [resume: Resume]
+  toggleResponseLimit: [resume: Resume]
+  setResponseLimit: [resume: Resume, limit: number]
   publish: [resume: Resume]
   ats: [resume: Resume]
   collect: [resume: Resume]
@@ -20,6 +22,7 @@ const emit = defineEmits<{
     <div v-if="!resumes.length" class="empty">{{ connected ? 'Резюме ещё не синхронизированы.' : 'Подключите аккаунт hh.ru.' }}</div>
     <ResumeCard v-for="resume in resumes" :key="resume.id" :resume="resume" :busy="busy" :browser-saved="browserSaved"
       @toggle-publishing="emit('togglePublishing', resume)" @toggle-monitoring="emit('toggleMonitoring', resume)"
+      @toggle-response-limit="emit('toggleResponseLimit', resume)" @set-response-limit="emit('setResponseLimit', resume, $event)"
       @publish="emit('publish', resume)" @ats="emit('ats', resume)" @collect="emit('collect', resume)"
       @history="emit('history', resume)" @vacancies="emit('vacancies', resume)" @remove="emit('remove', resume)" />
   </section>
