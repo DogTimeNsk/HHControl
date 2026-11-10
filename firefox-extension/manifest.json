@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "HH Vacancy Live Details",
+  "version": "0.1.0",
+  "description": "Shows live vacancy metadata from HH-Lux-InitialState on hh.ru vacancy pages.",
+  "content_scripts": [
+    {
+      "matches": ["https://hh.ru/vacancy/*", "https://*.hh.ru/vacancy/*"],
+      "js": ["normalizer.js", "content.js"],
+      "css": ["panel.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
