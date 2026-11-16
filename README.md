@@ -93,6 +93,12 @@ The noVNC path must remain protected by the same IP ACL and dashboard access
 controls as the application. The browser session is for one personal HH account
 only; do not expose `/browser/` publicly.
 
+Before a browser-driven publication or vacancy collection, the application opens
+the applicant resumes page and treats HH's redirect to `/account/login` as an
+expired session. It stops the operation and sends one critical Telegram alert
+per expiration period when Telegram is configured. After a successful session
+check, a later expiration can notify again.
+
 The refresh token is used only after the access token expires, because HH refresh tokens are single-use. If authorization is revoked or refresh fails, reconnect through the dashboard.
 
 If HH returns `403 forbidden` for `/resumes/mine` while the log shows

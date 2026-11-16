@@ -1,5 +1,5 @@
 from app.browser.parsing import resume_id_from_url
-from app.browser.control import _additional_search_page_urls
+from app.browser.control import _additional_search_page_urls, _is_login_redirect
 
 
 def test_extracts_real_hh_resume_id() -> None:
@@ -18,3 +18,8 @@ def test_limits_vacancy_search_to_first_four_pages() -> None:
     ]
 
     assert _additional_search_page_urls(links) == links[1:4]
+
+
+def test_login_redirect_path_is_distinct_from_applicant_page() -> None:
+    assert _is_login_redirect("https://hh.ru/account/login?backurl=%2Fapplicant%2Fresumes") is True
+    assert _is_login_redirect("https://hh.ru/applicant/resumes") is False

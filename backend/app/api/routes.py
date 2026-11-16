@@ -17,6 +17,7 @@ from app.models.entities import AdminUser, BrowserCredential, OAuthCredential, O
 from app.schemas.api import EventOut, LoginRequest, ManualResumeCreate, ResumeOut, ResumePatch, VacancyCollectionOut, VacancyMatchOut
 from app.services.hh_client import HHClient, HHError
 from app.services.browser_control import BrowserControlClient, BrowserControlError
+from app.services.browser_auth import BrowserSessionExpired, require_browser_authorization
 from app.services.publish_service import publish_resume
 from app.services.resume_service import parse_datetime, sync_resumes
 from app.services.vacancy_monitor_service import collect_vacancies
@@ -334,8 +335,12 @@ async def publish(resume_id: int, _: AdminUser = Depends(require_admin), session
     if not resume:
         raise HTTPException(404, "Резюме не найдено")
     if await session.get(BrowserCredential, 1):
+        client = BrowserControlClient(settings)
         try:
-            result = await BrowserControlClient(settings).publish(resume.hh_resume_id)
+            await require_browser_authorization(session, client)
+            result = await client.publish(resume.hh_resume_id)
+        except BrowserSessionExpired as exc:
+            raise HTTPException(409, str(exc)) from exc
         except BrowserControlError as exc:
             raise HTTPException(503, str(exc)) from exc
         now = datetime.now(timezone.utc)
@@ -381,7 +386,13 @@ async def collect_vacancy_matches(resume_id: int, _: AdminUser = Depends(require
         raise HTTPException(409, "Сейчас выполняется другая задача планировщика")
     try:
         try:
-            new_count = await collect_vacancies(session, resume, BrowserControlClient(settings))
+            client = BrowserControlClient(settings)
+            await require_browser_authorization(session, client)
+            new_count = await collect_vacancies(session, resume, client)
+        except BrowserSessionExpired as exc:
+            resume.last_error = str(exc)
+            await session.commit()
+            raise HTTPException(409, str(exc)) from exc
         except BrowserControlError as exc:
             resume.last_error = str(exc)
             await session.commit()

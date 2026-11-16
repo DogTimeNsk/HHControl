@@ -82,6 +82,20 @@ async def open_hh() -> dict[str, str]:
     return {"status": "opened"}
 
 
+@app.get("/session/authenticated")
+async def authenticated() -> dict[str, bool]:
+    """Check the saved HH session using its redirect from an applicant-only page."""
+    page = await page_for_user()
+    await page.goto("https://hh.ru/applicant/resumes", wait_until="domcontentloaded")
+    # An expired HH session is redirected to /account/login.  This is more
+    # stable than inspecting a login button, whose presence varies by layout.
+    return {"authenticated": not _is_login_redirect(page.url)}
+
+
+def _is_login_redirect(url: str) -> bool:
+    return urlsplit(url).path == "/account/login"
+
+
 @app.get("/resumes")
 async def resumes() -> dict[str, list[dict[str, str]]]:
     page = await page_for_user()

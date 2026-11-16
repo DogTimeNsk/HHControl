@@ -10,6 +10,7 @@ from app.core.security import as_utc, lock_until
 from app.db.session import SessionLocal
 from app.models.entities import AppSetting, BrowserCredential, PublishEvent, Resume
 from app.services.browser_control import BrowserControlClient, BrowserControlError
+from app.services.browser_auth import BrowserSessionExpired, require_browser_authorization
 from app.services.publish_service import publish_resume
 from app.services.resume_service import parse_datetime
 from app.services.vacancy_monitor_service import collect_vacancies
@@ -86,11 +87,21 @@ async def run_scheduled_publish() -> dict[str, int | str]:
                                         f"Ожидание browser session: {waited_seconds:.0f} сек.")
             browser_mode = bool(await session.get(BrowserCredential, 1))
             client = None if browser_mode else await hh_client(session)
+            if browser_mode and resumes:
+                client = BrowserControlClient(settings)
+                try:
+                    await require_browser_authorization(session, client)
+                except BrowserSessionExpired as exc:
+                    for resume in resumes:
+                        add_scheduler_event(session, resume, now, "failed", str(exc))
+                        resume.last_error = str(exc)
+                    await session.commit()
+                    return {"status": "browser_session_expired", "processed": 0}
             for resume in resumes:
                 if browser_mode:
                     attempt_at = datetime.now(timezone.utc)
                     try:
-                        result = await BrowserControlClient(settings).publish(resume.hh_resume_id)
+                        result = await client.publish(resume.hh_resume_id)
                         event = PublishEvent(resume_id=resume.id, started_at=attempt_at, finished_at=attempt_at, operation="publish", result=result["result"], http_status=None, message=result["message"])
                         resume.last_checked_at = attempt_at
                         resume.next_publish_at = parse_datetime(result.get("next_publish_at"))
@@ -125,6 +136,14 @@ async def run_scheduled_vacancy_collection() -> dict[str, int | str]:
                 Resume.vacancy_monitoring_enabled.is_(True), Resume.managed.is_(True)
             ))).all()
             client = BrowserControlClient(get_settings())
+            if resumes:
+                try:
+                    await require_browser_authorization(session, client)
+                except BrowserSessionExpired as exc:
+                    for resume in resumes:
+                        resume.last_error = str(exc)
+                    await session.commit()
+                    return {"status": "browser_session_expired", "processed": 0}
             processed = 0
             for resume in resumes:
                 try:

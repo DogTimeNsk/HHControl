@@ -28,6 +28,18 @@ class BrowserControlClient:
         except httpx.HTTPError as exc:
             raise BrowserControlError("Browser is unavailable") from exc
 
+    async def authenticated(self) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(f"{self.settings.browser_control_url}/session/authenticated")
+            response.raise_for_status()
+            authenticated = response.json()["authenticated"]
+            if not isinstance(authenticated, bool):
+                raise ValueError("Invalid authenticated value")
+            return authenticated
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise BrowserControlError("Не удалось проверить авторизацию в личном кабинете HH") from exc
+
     async def resumes(self) -> list[dict[str, str]]:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
